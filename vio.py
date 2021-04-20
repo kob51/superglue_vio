@@ -391,6 +391,8 @@ if __name__ == "__main__":
     fig = plt.figure()
     ax = plt.axes(projection="3d")
 
+
+    first = True
     while True:
 
         out_image_pair, pts1, pts2 = superMatcher.process(vehicle.front_camera[:, :, 0])
@@ -421,27 +423,33 @@ if __name__ == "__main__":
         trajectory_gt.append(gt_pos)
 
         cv2.imshow("matches", out_image_pair)
-        cv2.imshow("depth", vehicle.front_camera_depth_old)
+        # cv2.imshow("depth", vehicle.front_camera_depth_old)
         cv2.waitKey(1)
         superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
 
         print("Trajectory Length:", len(trajectory))
         print(vehicle.imu_sensor.accelerometer)
+        print(vehicle.imu_sensor.gyroscope)
+        print(vehicle.imu_sensor.timestamp)
 
-        if len(trajectory) == 1000:
+        # if len(trajectory) == 1000:
+        if len(trajectory) == 25:
             break
         trajectory_np = np.asarray(trajectory).T
         trajectory_gt_np = np.asarray(trajectory_gt).T
 
-        ax.plot3D(-1 * trajectory_np[2], trajectory_np[0], trajectory_np[1], "green")
-        ax.plot3D(trajectory_gt_np[0], trajectory_gt_np[1], trajectory_gt_np[2], "red")
+        ax.plot3D(-1 * trajectory_np[2], trajectory_np[0], trajectory_np[1], "green",label = "Estimated")
+        ax.plot3D(trajectory_gt_np[0], trajectory_gt_np[1], trajectory_gt_np[2], "red",label="Ground Truth")
 
-        ax.set_xlabel("X axis")
-        ax.set_ylabel("Y axis")
-        ax.set_zlabel("Z axis")
-        ax.set_xlim3d(-50, 50)
-        ax.set_ylim3d(-50, 50)
-        ax.set_zlim3d(-50, 50)
+        if first:
+            ax.set_xlabel("X axis")
+            ax.set_ylabel("Y axis")
+            ax.set_zlabel("Z axis")
+            ax.set_xlim3d(-50, 50)
+            ax.set_ylim3d(-50, 50)
+            ax.set_zlim3d(-50, 50)
+            ax.legend()
+            first = False
 
         plt.pause(0.05)
 
