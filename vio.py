@@ -34,6 +34,8 @@ import math
 
 matplotlib.use("TkAgg")
 
+from ekf import EKF
+
 
 torch.set_grad_enabled(False)
 
@@ -193,6 +195,7 @@ class IMUSensor:
         self.sensor.listen(
             lambda sensor_data: IMUSensor._IMU_callback(weak_self, sensor_data)
         )
+        self.timestamp = 0.
 
     @staticmethod
     def _IMU_callback(weak_self, sensor_data):
@@ -200,17 +203,18 @@ class IMUSensor:
         if not self:
             return
         limits = (-99.9, 99.9)
-        self.accelerometer = (
+        self.accelerometer = np.array((
             max(limits[0], min(limits[1], sensor_data.accelerometer.x)),
             max(limits[0], min(limits[1], sensor_data.accelerometer.y)),
             max(limits[0], min(limits[1], sensor_data.accelerometer.z)),
-        )
-        self.gyroscope = (
+        ))
+        self.gyroscope = np.array((
             max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.x))),
             max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.y))),
             max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.z))),
-        )
+        ))
         self.compass = math.degrees(sensor_data.compass)
+        self.timestamp = sensor_data.timestamp
 
 
 class Car:
@@ -340,11 +344,12 @@ if __name__ == "__main__":
     time.sleep(4)
 
     superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
-
+    t_prev = vehicle.imu_sensor.timestamp
+    print(t_prev)
     counter = 0
 
     all_poses = [np.eye(4)]
-    trajectory = [np.array([0, 0, 0])]
+    trajectory_vo = [np.array([0, 0, 0])]
 
     initial_transform = vehicle.actor_list[0].get_transform()
     initial_rotation = initial_transform.rotation
@@ -391,9 +396,19 @@ if __name__ == "__main__":
     fig = plt.figure()
     ax = plt.axes(projection="3d")
 
+    vio_ekf = EKF(np.array([0,0,0]),np.array([0,0,0]),np.array([1,0,0,0]),debug=False)
 
     first = True
     while True:
+
+        #### EKF Prediction #######################
+        accel = vehicle.imu_sensor.accelerometer
+        gyro = vehicle.imu_sensor.gyroscope
+        t = vehicle.imu_sensor.timestamp
+
+        vio_ekf.IMUPrediction(accel,gyro,t-t_prev)
+        t_prev = t
+        ########################################3
 
         out_image_pair, pts1, pts2 = superMatcher.process(vehicle.front_camera[:, :, 0])
         R, t = motionEstimator.estimate_R_t(
@@ -412,7 +427,14 @@ if __name__ == "__main__":
         global_robot_pose = all_poses[-1] @ current_pose
         all_poses.append(global_robot_pose)
         position_xyz = global_robot_pose @ np.array([0, 0, 0, 1])
-        trajectory.append(position_xyz[:3])
+        trajectory_vo.append(position_xyz[:3])
+
+        # EKF UPDATE #########################
+        vio_ekf.SuperGlueUpdate(position_xyz[:3],use_new_data=False)
+        vio_ekf.addToStateList()
+         ########################################
+
+        print("Trajectory Length:", len(trajectory_vo))
 
         gt_pos = vehicle.actor_list[0].get_location()
 
@@ -427,18 +449,16 @@ if __name__ == "__main__":
         cv2.waitKey(1)
         superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
 
-        print("Trajectory Length:", len(trajectory))
-        print(vehicle.imu_sensor.accelerometer)
-        print(vehicle.imu_sensor.gyroscope)
-        print(vehicle.imu_sensor.timestamp)
-
-        # if len(trajectory) == 1000:
-        if len(trajectory) == 25:
+    
+        if len(trajectory_vo) == 1000:
+        # if len(trajectory_vo) == 25:
             break
-        trajectory_np = np.asarray(trajectory).T
+        trajectory_vo_np = np.asarray(trajectory_vo).T
         trajectory_gt_np = np.asarray(trajectory_gt).T
+        trajectory_vio_np = vio_ekf.getTrajectory().T
 
-        ax.plot3D(-1 * trajectory_np[2], trajectory_np[0], trajectory_np[1], "green",label = "Estimated")
+        ax.plot3D(-1 * trajectory_vo_np[2], trajectory_vo_np[0], trajectory_vo_np[1], "green",label = "Estimated (VO)") 
+        ax.plot3D(-1 * trajectory_vio_np[2], trajectory_vio_np[0], trajectory_vio_np[1], "blue",label="Estimated (VIO)")
         ax.plot3D(trajectory_gt_np[0], trajectory_gt_np[1], trajectory_gt_np[2], "red",label="Ground Truth")
 
         if first:

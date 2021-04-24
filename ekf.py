@@ -8,6 +8,9 @@ import pickle
 
 from data.rotations import Quaternion
 
+import matplotlib
+matplotlib.use('TkAgg')
+
 def skew_symmetric(v):
     """ Skew symmetric operator for a 3x1 vector. """
     v = v.flatten()
@@ -43,9 +46,9 @@ class EKF:
         self.P = np.eye(9)
 
         # variances
-        self.sigma_a = 0.01
-        self.sigma_omega = 0.01
-        self.sigma_vo = 0
+        self.sigma_a = 0 #0.01
+        self.sigma_omega = 0 #0.01
+        self.sigma_vo = 0.005
         self.sigma_lidar = 35
         self.sigma_gnss = 0.1
 
@@ -65,7 +68,7 @@ class EKF:
             print("quat",self.state[6:])
             print()
 
-    def IMUPrediction(self,dt,accel,omega):
+    def IMUPrediction(self,accel,omega,dt):
 
         # STATE
         x_prev = self.state[:3]
@@ -113,7 +116,7 @@ class EKF:
         self.P = F @ self.P @ F.T + self.L @ Q @ self.L.T
 
     
-    def xyzUpdate(self,input_meas,meas_type):
+    def xyzUpdate(self,input_meas,meas_type,use_new_data=False):
 
         # takes input measurement of current x,y,z position
 
@@ -122,10 +125,17 @@ class EKF:
             Rot *= self.sigma_lidar
         if meas_type == 'gnss':
             Rot *= self.sigma_gnss
+        if meas_type == 'vo':
+            Rot *= self.sigma_vo
 
         K = self.P @ self.H.T @ np.linalg.inv(self.H @ self.P @ self.H.T + Rot)
 
+
+        if not use_new_data:
+            input_meas = self.state[:3].copy()
+        
         delta_x = K @ (input_meas - self.state[:3])
+        
 
         self.state[:3] = self.state[:3] + delta_x[:3]
         self.state[3:6] = self.state[3:6] + delta_x[3:6]
@@ -137,9 +147,12 @@ class EKF:
 
         self.P = (np.eye(9) - K @ self.H) @ self.P
 
-    def SuperGlueUpdate(self,t_vec):
-        # TODO
-        pass
+    def SuperGlueUpdate(self,xyz,use_new_data=True):
+        self.xyzUpdate(xyz,'vo',use_new_data)
+    
+    def getTrajectory(self):
+        # return xyz coordinates for plotting
+        return self.state_list[:,:3]
 
 # MAIN LOOP #####################
 if __name__ == "__main__":
