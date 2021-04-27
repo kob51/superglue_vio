@@ -46,8 +46,8 @@ class EKF:
         self.P = np.eye(9)
 
         # variances
-        self.sigma_a = 0 #0.01
-        self.sigma_omega = 0 #0.01
+        self.sigma_a = 0.01
+        self.sigma_omega = 0.01
         self.sigma_vo = 0.005
         self.sigma_lidar = 35
         self.sigma_gnss = 0.1
@@ -60,6 +60,11 @@ class EKF:
         self.H = np.zeros([3, 9])
         self.H[:, :3] = np.eye(3)  
 
+    def setSigmaAccel(self,sig):
+        self.sigma_a = sig
+    def setSigmaGyro(self,sig):
+        self.sigma_omega = sig
+    
     def addToStateList(self):
         self.state_list = np.concatenate((self.state_list,self.state.reshape(1,-1)))
         if self.debug:
@@ -116,7 +121,7 @@ class EKF:
         self.P = F @ self.P @ F.T + self.L @ Q @ self.L.T
 
     
-    def xyzUpdate(self,input_meas,meas_type,use_new_data=False):
+    def xyzUpdate(self,input_meas,meas_type,use_new_data=True):
 
         # takes input measurement of current x,y,z position
 
@@ -178,6 +183,8 @@ if __name__ == "__main__":
     # initialize with the gt position
     # don't use gt anymore for the rest of the run
     ekf = EKF(gt.p[0],gt.v[0],R.from_euler('xyz',gt.r[0]).as_quat(),debug=True)
+    ekf.setSigmaAccel(0.01)
+    ekf.setSigmaGyro(0.01)
 
     x_list = []
     x_list.append(gt.p[0])
@@ -189,7 +196,7 @@ if __name__ == "__main__":
         gyroscope = imu_w.data[k-1]
 
         # Prediction step using the current IMU reading
-        ekf.IMUPrediction(dt,accelerometer,gyroscope)
+        ekf.IMUPrediction(accelerometer,gyroscope,dt)
 
         # Update step using gnss measurements
         for i in range(len(gnss.t)):
@@ -228,6 +235,7 @@ if __name__ == "__main__":
 
     est_traj_fig = plt.figure()
     ax = est_traj_fig.add_subplot(111, projection='3d')
+
     ax.plot(ekf.state_list[:,0], ekf.state_list[:,1], ekf.state_list[:,2], label='Estimated')
     ax.plot(gt.p[:,0], gt.p[:,1], gt.p[:,2], label='Ground Truth')
     ax.set_xlabel('x [m]')
