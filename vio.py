@@ -40,7 +40,6 @@ import copy
 from transforms3d.euler import euler2mat
 
 
-
 torch.set_grad_enabled(False)
 
 
@@ -347,6 +346,7 @@ class Car:
         self.front_camera_semantic = i2
         # brak
 
+
 def carla_rotation_to_RPY(carla_rotation):
     """
     Convert a carla rotation to a roll, pitch, yaw tuple
@@ -363,6 +363,7 @@ def carla_rotation_to_RPY(carla_rotation):
     yaw = -math.radians(carla_rotation.yaw)
 
     return (roll, pitch, yaw)
+
 
 def carla_rotation_to_numpy_rotation_matrix(carla_rotation):
     """
@@ -402,36 +403,38 @@ if __name__ == "__main__":
     initial_rotation = initial_transform.rotation
     initial_location = initial_transform.location
 
-    r_right_handed_true = R.from_matrix(carla_rotation_to_numpy_rotation_matrix(initial_rotation))
-
-    
-    t_right_handed_true = np.array(
+    r_right_handed = R.from_matrix(
+        carla_rotation_to_numpy_rotation_matrix(initial_rotation)
+    )
+    t_right_handed = np.array(
         [initial_location.x, initial_location.y * -1, initial_location.z]
     ).T
+    initial_quat = np.roll(r_right_handed.inv().as_quat(), 1)
 
-    initial_quat = np.roll(r_right_handed_true.as_quat(), 1)
+    # H_local_to_global = np.eye(4)
+    # H_local_to_global[:3, :3] = r_right_handed.as_matrix()
+    # H_local_to_global[:3, 3] = t_right_handed
+    # H_global_to_local = np.linalg.inv(H_local_to_global)
 
-    H_local_to_global = np.eye(4)
-    H_local_to_global[:3, :3] = r_right_handed_true.as_matrix()
-    H_local_to_global[:3, 3] = t_right_handed_true
-    H_global_to_local = np.linalg.inv(H_local_to_global)
+    # r_right_handed = R.from_matrix(H_global_to_local[:3, :3])
+    # t_right_handed = H_global_to_local[:3, 3]
 
-    r_right_handed = R.from_matrix(H_global_to_local[:3, :3])
-    t_right_handed = H_global_to_local[:3, 3]
-    
     # print(r_right_handed.as_rotvec(), r_right_handed_true.as_rotvec(), r_right_handed_true.as_matrix() @ r_right_handed.as_matrix())
     # print("H")
     # brak
 
-    r_right_handed = r_right_handed.as_rotvec()
-    r_left_handed = -1 * r_right_handed * 180 / np.pi
-    t_left_handed = t_right_handed.T
-    t_left_handed[1] = t_left_handed[1] * -1
+    # r_right_handed = r_right_handed.as_rotvec()
+    # r_left_handed = -1 * r_right_handed * 180 / np.pi
+    # t_left_handed = t_right_handed.T
+    # t_left_handed[1] = t_left_handed[1] * -1
 
-    roll, pitch, yaw = r_left_handed
-    initial_quat = np.roll(r_right_handed_true.inv().as_quat(),1)
+    roll, pitch, yaw = (
+        initial_rotation.roll,
+        initial_rotation.pitch,
+        initial_rotation.yaw,
+    )
 
-    x, y, z = t_left_handed
+    x, y, z = initial_location.x, initial_location.y, initial_location.z
 
     inv_transform = carla.Transform(
         location=carla.Location(x=x, y=y, z=z),
@@ -449,7 +452,6 @@ if __name__ == "__main__":
 
     vio_ekf = EKF(np.array([0, 0, 0]), np.array([0, 0, 0]), initial_quat, debug=False)
     vio_ekf.use_new_data = False
-
 
     vio_ekf.setSigmaAccel(0.0)
     vio_ekf.setSigmaGyro(0.0)
