@@ -25,6 +25,8 @@ class EKF:
         self.scipy = scipy
         self.debug = debug
 
+        self.use_new_data = True
+
         # [x,y,z,vx,vy,vz,qw,qx,qy,qz]
         self.state = np.zeros(10)
         self.state[:3] = gt_p
@@ -121,7 +123,7 @@ class EKF:
         self.P = F @ self.P @ F.T + self.L @ Q @ self.L.T
 
     
-    def xyzUpdate(self,input_meas,meas_type,use_new_data=True):
+    def xyzUpdate(self,input_meas,meas_type):
 
         # takes input measurement of current x,y,z position
 
@@ -136,10 +138,11 @@ class EKF:
         K = self.P @ self.H.T @ np.linalg.inv(self.H @ self.P @ self.H.T + Rot)
 
 
-        if not use_new_data:
+        if not self.use_new_data:
             input_meas = self.state[:3].copy()
         
         delta_x = K @ (input_meas - self.state[:3])
+        print(delta_x)
         
 
         self.state[:3] = self.state[:3] + delta_x[:3]
@@ -152,8 +155,8 @@ class EKF:
 
         self.P = (np.eye(9) - K @ self.H) @ self.P
 
-    def SuperGlueUpdate(self,xyz,use_new_data=True):
-        self.xyzUpdate(xyz,'vo',use_new_data)
+    def SuperGlueUpdate(self,xyz):
+        self.xyzUpdate(xyz,'vo')
     
     def getTrajectory(self):
         # return xyz coordinates for plotting
