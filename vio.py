@@ -258,7 +258,7 @@ class Car:
         self.transform = random.choice(self.world.get_map().get_spawn_points())
         self.transform.location.z += 1
         self.vehicle = self.world.spawn_actor(self.model_3, self.transform)
-        self.vehicle.set_autopilot()
+        # self.vehicle.set_autopilot()
         self.actor_list.append(self.vehicle)
 
         self.rgb_cam = self.world.get_blueprint_library().find("sensor.camera.rgb")
@@ -422,6 +422,7 @@ if __name__ == "__main__":
         print("Gy:\t", gyro)
         print("Ac:\t", accel)
         # from IPython import embed; embed()
+        print(type(accel))
 
         vio_ekf.IMUPrediction(accel,gyro,t-t_prev)
         t_prev = t
