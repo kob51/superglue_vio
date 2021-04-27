@@ -36,6 +36,8 @@ matplotlib.use("TkAgg")
 
 from ekf import EKF
 
+import copy
+
 
 torch.set_grad_enabled(False)
 
@@ -256,7 +258,7 @@ class Car:
         self.transform = random.choice(self.world.get_map().get_spawn_points())
         self.transform.location.z += 1
         self.vehicle = self.world.spawn_actor(self.model_3, self.transform)
-        # self.vehicle.set_autopilot()
+        self.vehicle.set_autopilot()
         self.actor_list.append(self.vehicle)
 
         self.rgb_cam = self.world.get_blueprint_library().find("sensor.camera.rgb")
@@ -413,11 +415,9 @@ if __name__ == "__main__":
     while True:
 
         #### EKF Prediction #######################
-        accel = vehicle.imu_sensor.accelerometer
-        gyro = vehicle.imu_sensor.gyroscope
-        t = vehicle.imu_sensor.timestamp
-
-        accel[2] *= -1.0
+        accel = copy.deepcopy(vehicle.imu_sensor.accelerometer)
+        gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
+        t = copy.deepcopy(vehicle.imu_sensor.timestamp)
 
         print("Gy:\t", gyro)
         print("Ac:\t", accel)
@@ -482,9 +482,9 @@ if __name__ == "__main__":
             ax.set_xlabel("X axis")
             ax.set_ylabel("Y axis")
             ax.set_zlabel("Z axis")
-            ax.set_xlim3d(-50, 50)
-            ax.set_ylim3d(-50, 50)
-            ax.set_zlim3d(-50, 50)
+            # ax.set_xlim3d(-50, 50)
+            # ax.set_ylim3d(-50, 50)
+            # ax.set_zlim3d(-50, 50)
             ax.legend()
             first = False
 
