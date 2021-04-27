@@ -37,6 +37,8 @@ matplotlib.use("TkAgg")
 from ekf import EKF
 
 import copy
+from transforms3d.euler import euler2mat
+
 
 
 torch.set_grad_enabled(False)
@@ -204,7 +206,7 @@ class IMUSensor:
         self.sensor.listen(
             lambda sensor_data: IMUSensor._IMU_callback(weak_self, sensor_data)
         )
-        self.timestamp = 0.
+        self.timestamp = 0.0
 
     @staticmethod
     def _IMU_callback(weak_self, sensor_data):
@@ -212,16 +214,20 @@ class IMUSensor:
         if not self:
             return
         limits = (-99.9, 99.9)
-        self.accelerometer = np.array((
-            max(limits[0], min(limits[1], sensor_data.accelerometer.x)),
-            max(limits[0], min(limits[1], sensor_data.accelerometer.y)),
-            max(limits[0], min(limits[1], sensor_data.accelerometer.z)),
-        ))
-        self.gyroscope = np.array((
-            max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.x))),
-            max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.y))),
-            max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.z))),
-        ))
+        self.accelerometer = np.array(
+            (
+                max(limits[0], min(limits[1], sensor_data.accelerometer.x)),
+                max(limits[0], min(limits[1], sensor_data.accelerometer.y)),
+                max(limits[0], min(limits[1], sensor_data.accelerometer.z)),
+            )
+        )
+        self.gyroscope = np.array(
+            (
+                max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.x))),
+                max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.y))),
+                max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.z))),
+            )
+        )
         self.compass = math.degrees(sensor_data.compass)
         self.timestamp = sensor_data.timestamp
 
@@ -341,6 +347,39 @@ class Car:
         self.front_camera_semantic = i2
         # brak
 
+def carla_rotation_to_RPY(carla_rotation):
+    """
+    Convert a carla rotation to a roll, pitch, yaw tuple
+    Considers the conversion from left-handed system (unreal) to right-handed
+    system (ROS).
+    Considers the conversion from degrees (carla) to radians (ROS).
+    :param carla_rotation: the carla rotation
+    :type carla_rotation: carla.Rotation
+    :return: a tuple with 3 elements (roll, pitch, yaw)
+    :rtype: tuple
+    """
+    roll = math.radians(carla_rotation.roll)
+    pitch = -math.radians(carla_rotation.pitch)
+    yaw = -math.radians(carla_rotation.yaw)
+
+    return (roll, pitch, yaw)
+
+def carla_rotation_to_numpy_rotation_matrix(carla_rotation):
+    """
+    Convert a carla rotation to a ROS quaternion
+    Considers the conversion from left-handed system (unreal) to right-handed
+    system (ROS).
+    Considers the conversion from degrees (carla) to radians (ROS).
+    :param carla_rotation: the carla rotation
+    :type carla_rotation: carla.Rotation
+    :return: a numpy.array with 3x3 elements
+    :rtype: numpy.array
+    """
+    roll, pitch, yaw = carla_rotation_to_RPY(carla_rotation)
+    numpy_array = euler2mat(roll, pitch, yaw)
+    rotation_matrix = numpy_array[:3, :3]
+    return rotation_matrix
+
 
 if __name__ == "__main__":
 
@@ -354,7 +393,6 @@ if __name__ == "__main__":
 
     superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
     t_prev = vehicle.imu_sensor.timestamp
-    print(t_prev)
     counter = 0
 
     all_poses = [np.eye(4)]
@@ -364,24 +402,26 @@ if __name__ == "__main__":
     initial_rotation = initial_transform.rotation
     initial_location = initial_transform.location
 
-    r_right_handed = R.from_rotvec(
-        -np.pi
-        / 180
-        * np.array(
-            [initial_rotation.roll, initial_rotation.pitch, initial_rotation.yaw]
-        )
-    )
-    t_right_handed = np.array(
+    r_right_handed_true = R.from_matrix(carla_rotation_to_numpy_rotation_matrix(initial_rotation))
+
+    
+    t_right_handed_true = np.array(
         [initial_location.x, initial_location.y * -1, initial_location.z]
     ).T
 
+    initial_quat = np.roll(r_right_handed_true.as_quat(), 1)
+
     H_local_to_global = np.eye(4)
-    H_local_to_global[:3, :3] = r_right_handed.as_matrix()
-    H_local_to_global[:3, 3] = t_right_handed
+    H_local_to_global[:3, :3] = r_right_handed_true.as_matrix()
+    H_local_to_global[:3, 3] = t_right_handed_true
     H_global_to_local = np.linalg.inv(H_local_to_global)
 
     r_right_handed = R.from_matrix(H_global_to_local[:3, :3])
     t_right_handed = H_global_to_local[:3, 3]
+    
+    # print(r_right_handed.as_rotvec(), r_right_handed_true.as_rotvec(), r_right_handed_true.as_matrix() @ r_right_handed.as_matrix())
+    # print("H")
+    # brak
 
     r_right_handed = r_right_handed.as_rotvec()
     r_left_handed = -1 * r_right_handed * 180 / np.pi
@@ -389,6 +429,8 @@ if __name__ == "__main__":
     t_left_handed[1] = t_left_handed[1] * -1
 
     roll, pitch, yaw = r_left_handed
+    initial_quat = np.roll(r_right_handed_true.inv().as_quat(),1)
+
     x, y, z = t_left_handed
 
     inv_transform = carla.Transform(
@@ -405,10 +447,11 @@ if __name__ == "__main__":
     fig = plt.figure()
     ax = plt.axes(projection="3d")
 
-    vio_ekf = EKF(np.array([0,0,0]),np.array([0,0,0]),np.array([1,0,0,0]),debug=False)
+    vio_ekf = EKF(np.array([0, 0, 0]), np.array([0, 0, 0]), initial_quat, debug=False)
     vio_ekf.use_new_data = False
 
-    vio_ekf.setSigmaAccel(0.)
+
+    vio_ekf.setSigmaAccel(0.0)
     vio_ekf.setSigmaGyro(0.0)
 
     first = True
@@ -419,12 +462,13 @@ if __name__ == "__main__":
         gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
         t = copy.deepcopy(vehicle.imu_sensor.timestamp)
 
+        accel[1] *= -1
+
         print("Gy:\t", gyro)
         print("Ac:\t", accel)
         # from IPython import embed; embed()
-        print(type(accel))
 
-        vio_ekf.IMUPrediction(accel,gyro,t-t_prev)
+        vio_ekf.IMUPrediction(accel, gyro, t - t_prev)
         t_prev = t
         ########################################3
 
@@ -450,7 +494,7 @@ if __name__ == "__main__":
         # EKF UPDATE #########################
         vio_ekf.SuperGlueUpdate(position_xyz[:3])
         vio_ekf.addToStateList()
-         ########################################
+        ########################################
 
         print("Trajectory Length:", len(trajectory_vo))
 
@@ -467,17 +511,34 @@ if __name__ == "__main__":
         cv2.waitKey(1)
         superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
 
-    
         if len(trajectory_vo) == 1000:
-        # if len(trajectory_vo) == 25:
+            # if len(trajectory_vo) == 25:
             break
         trajectory_vo_np = np.asarray(trajectory_vo).T
         trajectory_gt_np = np.asarray(trajectory_gt).T
         trajectory_vio_np = vio_ekf.getTrajectory().T
 
-        ax.plot3D(-1 * trajectory_vo_np[2], trajectory_vo_np[0], trajectory_vo_np[1], "green",label = "Estimated (VO)") 
-        ax.plot3D(-1 * trajectory_vio_np[2], trajectory_vio_np[0], trajectory_vio_np[1], "blue",label="Estimated (VIO)")
-        ax.plot3D(trajectory_gt_np[0], trajectory_gt_np[1], trajectory_gt_np[2], "red",label="Ground Truth")
+        ax.plot3D(
+            -1 * trajectory_vo_np[2],
+            trajectory_vo_np[0],
+            trajectory_vo_np[1],
+            "green",
+            label="Estimated (VO)",
+        )
+        ax.plot3D(
+            -1 * trajectory_vio_np[2],
+            trajectory_vio_np[0],
+            trajectory_vio_np[1],
+            "blue",
+            label="Estimated (VIO)",
+        )
+        ax.plot3D(
+            trajectory_gt_np[0],
+            trajectory_gt_np[1],
+            trajectory_gt_np[2],
+            "red",
+            label="Ground Truth",
+        )
 
         if first:
             ax.set_xlabel("X axis")
