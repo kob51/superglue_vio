@@ -256,7 +256,7 @@ class Car:
         self.transform = random.choice(self.world.get_map().get_spawn_points())
         self.transform.location.z += 1
         self.vehicle = self.world.spawn_actor(self.model_3, self.transform)
-        self.vehicle.set_autopilot()
+        # self.vehicle.set_autopilot()
         self.actor_list.append(self.vehicle)
 
         self.rgb_cam = self.world.get_blueprint_library().find("sensor.camera.rgb")
@@ -404,6 +404,10 @@ if __name__ == "__main__":
     ax = plt.axes(projection="3d")
 
     vio_ekf = EKF(np.array([0,0,0]),np.array([0,0,0]),np.array([1,0,0,0]),debug=False)
+    vio_ekf.use_new_data = False
+
+    vio_ekf.setSigmaAccel(0.)
+    vio_ekf.setSigmaGyro(0.0)
 
     first = True
     while True:
@@ -412,6 +416,12 @@ if __name__ == "__main__":
         accel = vehicle.imu_sensor.accelerometer
         gyro = vehicle.imu_sensor.gyroscope
         t = vehicle.imu_sensor.timestamp
+
+        accel[2] *= -1.0
+
+        print("Gy:\t", gyro)
+        print("Ac:\t", accel)
+        # from IPython import embed; embed()
 
         vio_ekf.IMUPrediction(accel,gyro,t-t_prev)
         t_prev = t
@@ -437,7 +447,7 @@ if __name__ == "__main__":
         trajectory_vo.append(position_xyz[:3])
 
         # EKF UPDATE #########################
-        vio_ekf.SuperGlueUpdate(position_xyz[:3],use_new_data=False)
+        vio_ekf.SuperGlueUpdate(position_xyz[:3])
         vio_ekf.addToStateList()
          ########################################
 

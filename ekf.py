@@ -94,7 +94,7 @@ class EKF:
 
         # current x estimate
         self.state[:3] = x_prev + (dt * v_prev) + 0.5 * dt**2 * (R_mat @ a_prev + self.g)
-        self.state[3:6] = v_prev + dt * (R_mat @ a_prev - self.g)
+        self.state[3:6] = v_prev + dt * (R_mat @ a_prev + self.g)
 
         # get current estimated rotation from imu, rotate current frame by this new value
         # (relative rotation --> right multiply)
