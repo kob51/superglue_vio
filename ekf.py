@@ -31,7 +31,7 @@ class EKF:
         self.state = np.zeros(10)
         self.state[:3] = gt_p
         self.state[3:6] = gt_v
-        self.state[6:] = np.roll(gt_quat, 1)
+        self.state[6:] = gt_quat
 
         self.state_list = np.zeros((0, 10))
         self.addToStateList()
@@ -88,24 +88,24 @@ class EKF:
         omega_prev = omega
 
         if self.scipy:
-            rotation = R.from_quat(np.roll(q_prev, -1))  # takes in x,y,z,w
+            rotation = R.from_quat(np.roll(q_prev, -1)).inv()  # takes in x,y,z,w
             R_mat = rotation.as_matrix()
         else:
             R_mat = Quaternion(*q_prev).to_mat()
-            
         print(a_prev, "A_prev", R_mat @ a_prev)
-        print("Effective Acceleration:",  R_mat @ a_prev - self.g)
-        
+        print("Effective Acceleration:",  R_mat @ a_prev + self.g)
+        print(" ")
+
         # current x estimate
         self.state[:3] = (
-            x_prev + (dt * v_prev) + 0.5 * dt ** 2 * (R_mat @ a_prev - self.g)
+            x_prev + (dt * v_prev) + 0.5 * dt ** 2 * (R_mat @ a_prev + self.g)
         )
-        self.state[3:6] = v_prev + dt * (R_mat @ a_prev - self.g)
+        self.state[3:6] = v_prev + dt * (R_mat @ a_prev + self.g)
 
         # get current estimated rotation from imu, rotate current frame by this new value
         # (relative rotation --> right multiply)
         if self.scipy:
-            self.state[6:] = np.roll(
+            self.state[6:] *= np.roll(
                 (rotation * R.from_euler("xyz", dt * omega_prev)).as_quat(), 1
             )
         else:

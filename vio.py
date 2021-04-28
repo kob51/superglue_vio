@@ -263,7 +263,7 @@ class Car:
         self.transform = random.choice(self.world.get_map().get_spawn_points())
         self.transform.location.z += 1
         self.vehicle = self.world.spawn_actor(self.model_3, self.transform)
-        # self.vehicle.set_autopilot()
+        self.vehicle.set_autopilot()
         self.actor_list.append(self.vehicle)
 
         self.rgb_cam = self.world.get_blueprint_library().find("sensor.camera.rgb")
@@ -337,14 +337,12 @@ class Car:
         self.front_camera_depth = i3
 
     def process_img_semantic(self, image):
-        # i = np.array(image.raw_data)
         image.convert(carla.ColorConverter.CityScapesPalette)
         i = np.array(image.raw_data)
         i2 = i.reshape((self.im_height, self.im_width, 4))
 
         self.front_camera_semantic_old = self.front_camera_semantic
         self.front_camera_semantic = i2
-        # brak
 
 
 def carla_rotation_to_RPY(carla_rotation):
@@ -384,57 +382,77 @@ def carla_rotation_to_numpy_rotation_matrix(carla_rotation):
 
 if __name__ == "__main__":
 
+    ## Initialize superglue + superpoint system
     superMatcher = SuperMatcher()
+
+    ## Initialize PnP system
     motionEstimator = MotionEstimator()
 
+    ## Create vehicle, and initialize the vehicle system
     vehicle = Car()
     vehicle.reset()
 
-    time.sleep(4)
+    ## Sleep for 2 seconds due to CARLA reasons (car needs some time to properly spawn)
+    time.sleep(2)
 
+    ## Initialize anchor, time reference,
     superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
     t_prev = vehicle.imu_sensor.timestamp
-    counter = 0
 
+    ## Initialize container for poses, and trajectory
     all_poses = [np.eye(4)]
     trajectory_vo = [np.array([0, 0, 0])]
 
+    ## Get initial rotation and location (Left - Handed)
     initial_transform = vehicle.actor_list[0].get_transform()
     initial_rotation = initial_transform.rotation
     initial_location = initial_transform.location
 
+
+    ## Convert rotation and location to right-handed
     r_right_handed = R.from_matrix(
         carla_rotation_to_numpy_rotation_matrix(initial_rotation)
     )
     t_right_handed = np.array(
         [initial_location.x, initial_location.y * -1, initial_location.z]
     ).T
-    initial_quat = np.roll(r_right_handed.inv().as_quat(), 1)
 
-    # H_local_to_global = np.eye(4)
-    # H_local_to_global[:3, :3] = r_right_handed.as_matrix()
-    # H_local_to_global[:3, 3] = t_right_handed
-    # H_global_to_local = np.linalg.inv(H_local_to_global)
+    ## Convert the right-handed rotation to a quaternion, roll it to get the form w,x,y,z from x,y,z,w
+    initial_quat = np.roll(r_right_handed.as_quat(), 1)
 
-    # r_right_handed = R.from_matrix(H_global_to_local[:3, :3])
-    # t_right_handed = H_global_to_local[:3, 3]
+    ## Initialize the EKF system #TODO check initial values
+    vio_ekf = EKF(np.array([0, 0, 0]), np.array([0, 0, 0]), initial_quat, debug=False)
+    vio_ekf.use_new_data = False
 
-    # print(r_right_handed.as_rotvec(), r_right_handed_true.as_rotvec(), r_right_handed_true.as_matrix() @ r_right_handed.as_matrix())
-    # print("H")
-    # brak
+    # --- Set instrument noise parameters
+    vio_ekf.setSigmaAccel(0.0)
+    vio_ekf.setSigmaGyro(0.0)
 
-    # r_right_handed = r_right_handed.as_rotvec()
-    # r_left_handed = -1 * r_right_handed * 180 / np.pi
-    # t_left_handed = t_right_handed.T
-    # t_left_handed[1] = t_left_handed[1] * -1
+    ### Location transform ###############################################
+    H_local_to_global = np.eye(4)
+    H_local_to_global[:3, :3] = r_right_handed.as_matrix()
+    H_local_to_global[:3, 3] = t_right_handed
+    H_global_to_local = np.linalg.inv(H_local_to_global)
+
+    r_right_handed = R.from_matrix(H_global_to_local[:3, :3])
+    t_right_handed = H_global_to_local[:3, 3]
+
+    r_right_handed = r_right_handed.as_rotvec()
+    r_left_handed = -1 * r_right_handed * 180 / np.pi
+    t_left_handed = t_right_handed.T
+    t_left_handed[1] = t_left_handed[1] * -1
 
     roll, pitch, yaw = (
-        initial_rotation.roll,
-        initial_rotation.pitch,
-        initial_rotation.yaw,
+        r_left_handed[0],
+        r_left_handed[1],
+        r_left_handed[2],
     )
 
-    x, y, z = initial_location.x, initial_location.y, initial_location.z
+    (
+        x,
+        y,
+        z,
+    ) = t_left_handed  # initial_location.x, initial_location.y, initial_location.z
 
     inv_transform = carla.Transform(
         location=carla.Location(x=x, y=y, z=z),
@@ -446,15 +464,10 @@ if __name__ == "__main__":
     initial_pos = np.array([initial_location.x, initial_location.y, initial_location.z])
 
     trajectory_gt = [initial_pos]
+    #########################################################################
 
     fig = plt.figure()
     ax = plt.axes(projection="3d")
-
-    vio_ekf = EKF(np.array([0, 0, 0]), np.array([0, 0, 0]), initial_quat, debug=False)
-    vio_ekf.use_new_data = False
-
-    vio_ekf.setSigmaAccel(0.0)
-    vio_ekf.setSigmaGyro(0.0)
 
     first = True
     while True:
@@ -464,18 +477,24 @@ if __name__ == "__main__":
         gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
         t = copy.deepcopy(vehicle.imu_sensor.timestamp)
 
+        # convert to right-handed coordinates
         accel[1] *= -1
+        gyro *= 180/np.pi
+        gyro = carla.Rotation(roll=gyro[0], pitch=gyro[1], yaw=gyro[2])
+        gyro = R.from_matrix(carla_rotation_to_numpy_rotation_matrix(gyro))
+        gyro = gyro.as_euler("xyz")
 
+        #######################################################
         print("Gy:\t", gyro)
         print("Ac:\t", accel)
-        # from IPython import embed; embed()
 
+        # Perform prediction based on IMU signal
         vio_ekf.IMUPrediction(accel, gyro, t - t_prev)
         t_prev = t
         ########################################3
 
         out_image_pair, pts1, pts2 = superMatcher.process(vehicle.front_camera[:, :, 0])
-        R, t = motionEstimator.estimate_R_t(
+        R_, t = motionEstimator.estimate_R_t(
             pts1,
             pts2,
             vehicle.front_camera_intrinsics,
@@ -483,7 +502,7 @@ if __name__ == "__main__":
             vehicle.front_camera_semantic_old,
         )
         current_pose = np.eye(4)
-        current_pose[:3, :3] = R
+        current_pose[:3, :3] = R_
         current_pose[:3, 3] = t.reshape(
             3,
         )
@@ -494,11 +513,11 @@ if __name__ == "__main__":
         trajectory_vo.append(position_xyz[:3])
 
         # EKF UPDATE #########################
-        vio_ekf.SuperGlueUpdate(position_xyz[:3])
+        # vio_ekf.SuperGlueUpdate(position_xyz[:3])
         vio_ekf.addToStateList()
         ########################################
 
-        print("Trajectory Length:", len(trajectory_vo))
+        # print("Trajectory Length:", len(trajectory_vo))
 
         gt_pos = vehicle.actor_list[0].get_location()
 
@@ -546,9 +565,9 @@ if __name__ == "__main__":
             ax.set_xlabel("X axis")
             ax.set_ylabel("Y axis")
             ax.set_zlabel("Z axis")
-            # ax.set_xlim3d(-50, 50)
-            # ax.set_ylim3d(-50, 50)
-            # ax.set_zlim3d(-50, 50)
+            ax.set_xlim3d(-200, 200)
+            ax.set_ylim3d(-200, 200)
+            ax.set_zlim3d(-200, 200)
             ax.legend()
             first = False
 
