@@ -38,6 +38,7 @@ from ekf import EKF
 
 import copy
 from transforms3d.euler import euler2mat
+from agents.navigation.behavior_agent import BehaviorAgent
 
 
 torch.set_grad_enabled(False)
@@ -256,14 +257,50 @@ class Car:
 
         blueprint_library = self.world.get_blueprint_library()
         self.model_3 = blueprint_library.filter("model3")[0]
+        self.model_3.set_attribute('role_name', 'hero')
+        self.agent = None
+        
+        settings = self.world.get_settings()
+        settings.synchronous_mode = False  # Disables synchronous mode
+        settings.fixed_delta_seconds = 0
+        self.world.apply_settings(settings)
+            
 
     def reset(self):
+        
+        actors = self.world.get_actors()
+        self.client.apply_batch(
+            [carla.command.DestroyActor(x) for x in actors if "vehicle" in x.type_id]
+        )
+        self.client.apply_batch(
+            [carla.command.DestroyActor(x) for x in actors if "sensor" in x.type_id]
+        )
+        for a in actors.filter("vehicle*"):
+            if a.is_alive:
+                a.destroy()
+        for a in actors.filter("sensor*"):
+            if a.is_alive:
+                a.destroy()
+                
+        print("Scene init done!")
+        
         self.actor_list = []
 
-        self.transform = random.choice(self.world.get_map().get_spawn_points())
+
+        self.transform = self.world.get_map().get_spawn_points()[0]
         self.transform.location.z += 1
         self.vehicle = self.world.spawn_actor(self.model_3, self.transform)
-        self.vehicle.set_autopilot()
+        # self.vehicle.set_autopilot()
+        ##### Setup Agent #####
+        self.agent = BehaviorAgent(self.vehicle, behavior="normal")
+        destination_location = self.world.get_map().get_spawn_points()[50].location
+        self.agent.set_destination(self.vehicle.get_location(), destination_location, clean=True)
+        self.agent.update_information(self.world)
+        
+        
+        ########################
+        
+        
         self.actor_list.append(self.vehicle)
 
         self.rgb_cam = self.world.get_blueprint_library().find("sensor.camera.rgb")
@@ -395,6 +432,11 @@ if __name__ == "__main__":
 
     ## Sleep for 2 seconds due to CARLA reasons (car needs some time to properly spawn)
     time.sleep(2)
+    
+    settings = vehicle.world.get_settings()
+    settings.synchronous_mode = True  # Enables synchronous mode
+    settings.fixed_delta_seconds = 0.1#0.025
+    vehicle.world.apply_settings(settings)
 
     ## Initialize anchor, time reference,
     superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
@@ -466,6 +508,8 @@ if __name__ == "__main__":
     # Main Loop ############################################################# 
     first = True
     while True:
+        # vehicle.vehicle.apply_control(vehicle.agent.run_step())
+        # continue
 
         #### EKF Prediction #TODO #######################
         accel = copy.deepcopy(vehicle.imu_sensor.accelerometer)
@@ -499,7 +543,6 @@ if __name__ == "__main__":
         )
 
         cv2.imshow("matches", out_image_pair)
-        # cv2.imshow("depth", vehicle.front_camera_depth_old)
         cv2.waitKey(1)
         superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
 
@@ -523,7 +566,10 @@ if __name__ == "__main__":
         gt_pos = np.array([gt_pos.x, -gt_pos.y, gt_pos.z, 1])
         trajectory_gt.append(H_global_to_start @ gt_pos)
 
-        
+        # Apply control on vehicle
+        vehicle.vehicle.apply_control(vehicle.agent.run_step())
+        vehicle.world.tick()
+
 
         if len(trajectory_vo) == 1000:
             # if len(trajectory_vo) == 25:
