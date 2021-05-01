@@ -67,6 +67,9 @@ class EKF:
     def setSigmaGyro(self, sig):
         self.sigma_omega = sig
 
+    def setSigmaVO(self,sig):
+        self.sigma_vo = sig
+
     def addToStateList(self):
         self.state_list = np.concatenate((self.state_list, self.state.reshape(1, -1)))
         if self.debug:
@@ -84,17 +87,14 @@ class EKF:
 
         # IMU
         a_prev = accel
-        # print(a_prev, "A_prev", R_mat @ a_prev)
         omega_prev = omega
 
-        if self.scipy:
-            rotation = R.from_quat(np.roll(q_prev, -1)).inv()  # takes in x,y,z,w
-            R_mat = rotation.as_matrix()
-        else:
-            R_mat = Quaternion(*q_prev).to_mat()
-        print(a_prev, "A_prev", R_mat @ a_prev)
-        print("Effective Acceleration:",  R_mat @ a_prev + self.g)
-        print(" ")
+        # rotation = R.from_quat(np.roll(q_prev, -1)).inv()  # takes in x,y,z,w
+        rotation = R.from_quat(np.roll(q_prev, -1))
+        R_mat = rotation.as_matrix()
+        # print(a_prev, "A_prev", R_mat @ a_prev)
+        # print("Effective Acceleration:",  R_mat @ a_prev + self.g)
+        # print(" ")
 
         # current x estimate
         self.state[:3] = (
@@ -102,22 +102,20 @@ class EKF:
         )
         self.state[3:6] = v_prev + dt * (R_mat @ a_prev + self.g)
 
+        # print(R_mat @ a_prev,"original")
+        # print(np.linalg.inv(R_mat) @ a_prev, "inverse")
+        # f
+
         # get current estimated rotation from imu, rotate current frame by this new value
         # (relative rotation --> right multiply)
-        if self.scipy:
-            self.state[6:] *= np.roll(
-                (rotation * R.from_euler("xyz", dt * omega_prev)).as_quat(), 1
-            )
-        else:
-            self.state[6:] = Quaternion(euler=dt * omega_prev).quat_mult(self.state[6:])
+        self.state[6:] = np.roll(
+            (rotation * R.from_euler("xyz", dt * omega_prev)).as_quat(), 1
+        )
 
         # error
         F = np.eye(9)
         F[0:3, 3:6] = dt * np.eye(3)
-        if self.scipy:
-            F[3:6, 6:9] = R_mat @ -skew_symmetric(a_prev) * dt
-        else:
-            F[3:6, 6:9] = R_mat.dot(-skew_symmetric(a_prev)) * dt
+        F[3:6, 6:9] = R_mat @ -skew_symmetric(a_prev) * dt
 
         # uncertainty
         Q = np.eye(6)

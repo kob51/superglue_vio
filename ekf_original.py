@@ -96,6 +96,9 @@ class EKF:
         self.state[:3] = x_prev + (dt * v_prev) + 0.5 * dt**2 * (R_mat @ a_prev + self.g)
         self.state[3:6] = v_prev + dt * (R_mat @ a_prev - self.g)
 
+        # print(R_mat @ a_prev,"yo")
+        # f
+
         # get current estimated rotation from imu, rotate current frame by this new value
         # (relative rotation --> right multiply)
         if self.scipy:
@@ -188,15 +191,20 @@ if __name__ == "__main__":
     ekf = EKF(gt.p[0],gt.v[0],R.from_euler('xyz',gt.r[0]).as_quat(),debug=True)
     ekf.setSigmaAccel(0.01)
     ekf.setSigmaGyro(0.01)
+    ekf.use_new_data = False
 
     x_list = []
     x_list.append(gt.p[0])
 
+    max_gyro = np.zeros(3)
     for k in range(1, imu_f.data.shape[0]):
         dt = imu_f.t[k] - imu_f.t[k-1] 
 
         accelerometer = imu_f.data[k-1]
+        print(accelerometer)
+        # f
         gyroscope = imu_w.data[k-1]
+        print(gyroscope)
 
         # Prediction step using the current IMU reading
         ekf.IMUPrediction(accelerometer,gyroscope,dt)
@@ -215,6 +223,8 @@ if __name__ == "__main__":
         # add the current state estimate to our state list
         ekf.addToStateList()
 
+        # if k > 15:
+        #     fuck
 
     # EVALUATION STUFF
     pred = ekf.state_list[:,:3]
@@ -235,12 +245,15 @@ if __name__ == "__main__":
     print("Max Error:",np.max(norms),np.argmax(norms))
     print("Min Error:",np.min(norms),np.argmin(norms))
 
+    print(max_gyro)
 
     est_traj_fig = plt.figure()
     ax = est_traj_fig.add_subplot(111, projection='3d')
 
     ax.plot(ekf.state_list[:,0], ekf.state_list[:,1], ekf.state_list[:,2], label='Estimated')
     ax.plot(gt.p[:,0], gt.p[:,1], gt.p[:,2], label='Ground Truth')
+
+    np.savez("orig_data.npz",est=ekf.state_list,gt=gt.p,accel=imu_f.data,gyro=imu_w.data)
     ax.set_xlabel('x [m]')
     ax.set_ylabel('y [m]')
     ax.set_zlabel('z [m]')

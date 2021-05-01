@@ -40,6 +40,9 @@ import copy
 from transforms3d.euler import euler2mat
 from agents.navigation.behavior_agent import BehaviorAgent
 
+import os
+
+from datetime import datetime
 
 torch.set_grad_enabled(False)
 
@@ -416,7 +419,6 @@ def carla_rotation_to_numpy_rotation_matrix(carla_rotation):
     rotation_matrix = numpy_array[:3, :3]
     return rotation_matrix
 
-
 if __name__ == "__main__":
 
     # Initial Setup #########################################################
@@ -438,9 +440,11 @@ if __name__ == "__main__":
     settings.fixed_delta_seconds = 0.1#0.025
     vehicle.world.apply_settings(settings)
 
-    ## Initialize anchor, time reference,
+    ## Initialize anchor, time reference, initial sensor readings
     superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
     t_prev = vehicle.imu_sensor.timestamp
+    accel = copy.deepcopy(vehicle.imu_sensor.accelerometer)
+    gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
 
     # Initialize plot
     fig = plt.figure()
@@ -453,6 +457,7 @@ if __name__ == "__main__":
     #   1. global CARLA frame
     #   2. robot start frame
     #   3. VO frame
+
 
     ## Get initial rotation and location in CARLA global frame (Left - Handed)
     initial_transform = vehicle.actor_list[0].get_transform()
@@ -478,8 +483,6 @@ if __name__ == "__main__":
 
     # handles difference between VO axes and CARLA axes. only gets applied at the end
     vo_compensation = (R.from_euler('x',-90,degrees=True) * R.from_euler('z',90,degrees=True)).as_matrix()
-    
-
 
     # Initial trajectory points ##################################################
     ## Initialize container for robot poses, and trajectory (both in robot start frame)
@@ -496,33 +499,47 @@ if __name__ == "__main__":
     # EKF Initialization #TODO #########################################################
     # Convert the right-handed rotation to a quaternion, roll it to get the form w,x,y,z from x,y,z,w
     initial_quat_wxyz = np.roll(r_right_handed.as_quat(), 1)
+    # initial_quat_wxyz = np.roll(R.from_matrix(car_start_r).as_quat(), 1)
 
     ## Initialize the EKF system #TODO check initial values
-    vio_ekf = EKF(np.array([0,0,0]), np.array([0, 0, 0]), initial_quat_wxyz, debug=False)
+    # vio_ekf = EKF(np.array([0,0,0]), np.array([0, 0, 0]), initial_quat_wxyz, debug=False)
+    vio_ekf = EKF(np.array([0,0,0]), np.array([0, 0, 0]), np.array([1,0,0,0]), debug=False)
     vio_ekf.use_new_data = False
-    vio_ekf.setSigmaAccel(0.0)
-    vio_ekf.setSigmaGyro(0.0)
+    vio_ekf.setSigmaAccel(0.1)
+    vio_ekf.setSigmaGyro(0.1)
+    vio_ekf.setSigmaVO(0.1)
 
     
 
     # Main Loop ############################################################# 
+    max_length = 100
     first = True
     while True:
         # vehicle.vehicle.apply_control(vehicle.agent.run_step())
         # continue
 
         #### EKF Prediction #TODO #######################
-        accel = copy.deepcopy(vehicle.imu_sensor.accelerometer)
-        gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
         t = copy.deepcopy(vehicle.imu_sensor.timestamp)
+        next_accel = copy.deepcopy(vehicle.imu_sensor.accelerometer)
+        next_gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
 
-        # convert to right-handed coordinates 
+
+        # convert to right-handed coordinates
         accel[1] *= -1
+        
         gyro[1] *= -1
+        gyro[2] *= -1
+        gyro *= np.pi / 180 # radians
+
+        print(accel,"accel")
+        print(gyro,"gyro")
+        print()
 
         # Perform prediction based on IMU signal
         vio_ekf.IMUPrediction(accel, gyro, t - t_prev)
-        t_prev = t
+        t_prev = copy.deepcopy(t)
+        accel = copy.deepcopy(next_accel)
+        gyro = copy.deepcopy(next_gyro)
         ###############################################
         
         
@@ -555,7 +572,7 @@ if __name__ == "__main__":
 
 
         # EKF UPDATE #TODO #########################
-        # vio_ekf.SuperGlueUpdate(position_xyz[:3])
+        vio_ekf.SuperGlueUpdate((position_start[:3].T @ vo_compensation).T)
         vio_ekf.addToStateList()
         ########################################
 
@@ -569,11 +586,6 @@ if __name__ == "__main__":
         # Apply control on vehicle
         vehicle.vehicle.apply_control(vehicle.agent.run_step())
         vehicle.world.tick()
-
-
-        if len(trajectory_vo) == 1000:
-            # if len(trajectory_vo) == 25:
-            break
 
 
         # Plotting ####################################
@@ -601,13 +613,13 @@ if __name__ == "__main__":
             label="Estimated (VO)",
         )
 
-        # ax.plot3D(
-        #     trajectory_vio_np[0],
-        #     trajectory_vio_np[1],
-        #     trajectory_vio_np[2],
-        #     "blue",
-        #     label="Estimated (VIO)",
-        # )
+        ax.plot3D(
+            trajectory_vio_np[0],
+            trajectory_vio_np[1],
+            trajectory_vio_np[2],
+            "blue",
+            label="Estimated (VIO)",
+        )
 
         
         # figure setup
@@ -623,6 +635,17 @@ if __name__ == "__main__":
 
         plt.pause(0.05)
 
+        if len(trajectory_vo) == max_length:
+            break
+
+    if not os.path.exists('output'):
+        os.makedirs('output')
+
+    now = datetime.now()
+    npz_path = 'output/' + now.strftime("%d_%m_%H_%M_%S.npz")
+
+    np.savez(npz_path,gt=trajectory_gt_np,vo=trajectory_vo_np,vio=trajectory_vio_np)
+
+
     for actor in vehicle.actor_list:
         actor.destroy()
-    plt.show()
