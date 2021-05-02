@@ -122,15 +122,17 @@ class EKF:
     def xyzUpdate(self,input_meas,meas_type):
 
         # takes input measurement of current x,y,z position
-        Rot = np.eye(3)
-        if meas_type == 'lidar':
-            Rot *= self.sigma_lidar
-        if meas_type == 'gnss':
-            Rot *= self.sigma_gnss
-        if meas_type == 'vo':
-            Rot *= self.sigma_vo
 
-        K = self.P @ self.H.T @ np.linalg.inv((self.H @ self.P @ self.H.T) + Rot)
+        # sensor noise covariance
+        R_cov = np.eye(3)
+        if meas_type == 'lidar':
+            R_cov *= self.sigma_lidar
+        if meas_type == 'gnss':
+            R_cov *= self.sigma_gnss
+        if meas_type == 'vo':
+            R_cov *= self.sigma_vo
+
+        K = self.P @ self.H.T @ np.linalg.inv((self.H @ self.P @ self.H.T) + R_cov)
 
 
         if not self.use_new_data:
