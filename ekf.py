@@ -90,6 +90,7 @@ class EKF:
 
         rotation = R.from_quat(np.roll(q_prev,-1)) # takes in x,y,z,w
         R_mat = rotation.as_matrix()
+        # R_mat_inv = rotation.inv().as_matrix()
 
         f_ns = R_mat @ a_prev + self.g
 

@@ -437,7 +437,7 @@ if __name__ == "__main__":
     
     settings = vehicle.world.get_settings()
     settings.synchronous_mode = True  # Enables synchronous mode
-    settings.fixed_delta_seconds = 0.1#0.025
+    settings.fixed_delta_seconds = 0.1#0.025#0.025
     vehicle.world.apply_settings(settings)
 
     ## Initialize anchor, time reference, initial sensor readings
@@ -507,7 +507,7 @@ if __name__ == "__main__":
     vio_ekf.use_new_data = True
     vio_ekf.setSigmaAccel(1.)
     vio_ekf.setSigmaGyro(0.5)
-    vio_ekf.setSigmaVO(100.)
+    vio_ekf.setSigmaVO(5.)
 
     
 
@@ -517,7 +517,9 @@ if __name__ == "__main__":
     # Main Loop ############################################################# 
     max_length = 500
     first = True
+    step = 0
     while True:
+        step += 1
         accel_list.append(accel)
         gyro_list.append(gyro)
         # vehicle.vehicle.apply_control(vehicle.agent.run_step())
@@ -578,7 +580,13 @@ if __name__ == "__main__":
 
 
         # EKF UPDATE #TODO #########################
-        vio_ekf.SuperGlueUpdate((copy.deepcopy(position_start[:3]).T @ vo_compensation).T)
+        if(step % 10 == 0):
+            # vio_ekf.SuperGlueUpdate((copy.deepcopy(position_start[:3]).T @ vo_compensation).T)
+            vo_pose = (copy.deepcopy(position_start[:3]).T @ vo_compensation).T
+            vo_pose[2] = 0
+            vio_ekf.SuperGlueUpdate(vo_pose[:3])
+
+        
         vio_ekf.addToStateList()
         ########################################
 
