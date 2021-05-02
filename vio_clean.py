@@ -511,10 +511,15 @@ if __name__ == "__main__":
 
     
 
+    accel_list = []
+    gyro_list = []
+    
     # Main Loop ############################################################# 
     max_length = 100
     first = True
     while True:
+        accel_list.append(accel)
+        gyro_list.append(gyro)
         # vehicle.vehicle.apply_control(vehicle.agent.run_step())
         # continue
 
@@ -572,7 +577,7 @@ if __name__ == "__main__":
 
 
         # EKF UPDATE #TODO #########################
-        vio_ekf.SuperGlueUpdate((position_start[:3].T @ vo_compensation).T)
+        # vio_ekf.SuperGlueUpdate((position_start[:3].T @ vo_compensation).T)
         vio_ekf.addToStateList()
         ########################################
 
@@ -637,6 +642,11 @@ if __name__ == "__main__":
 
         if len(trajectory_vo) == max_length:
             break
+
+    gyro_list_np = np.array(gyro_list)
+    accel_list_np = np.array(accel_list)
+
+    np.savez("imu_output.npz",accel = accel_list_np,gyro = gyro_list_np,gt=trajectory_gt_np)
 
     if not os.path.exists('output'):
         os.makedirs('output')
