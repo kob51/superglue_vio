@@ -4,13 +4,15 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('TkAgg')
 
-# data = np.load("orig_data.npz")
-data = np.load("imu_output.npz")
+# path = "orig_data.npz"
+path = "imu_output.npz"
+
+data = np.load(path)
 
 gt = data['gt']
 if gt.shape[0] == 4:
     gt = gt.T
-# pred = data['est']
+
 accel = data['accel']
 gyro = data['gyro']
 
@@ -22,10 +24,16 @@ print("gyro",gyro.shape)
 print("accel",accel.shape)
 print("gt",gt.shape)
 
-plot_every = 5
+if path == "orig_data.npz":
+    plot_every = 100
+else:
+    plot_every = 5
 
 for i in range(len(gyro)):
     ax.plot(gt[:i,0],gt[:i,1],gt[:i,2],color='r')
+    ax.set_xlabel("X axis")
+    ax.set_ylabel("Y axis")
+    ax.set_zlabel("Z axis")
     if i % plot_every == 0:
         plt.waitforbuttonpress()
         print()

@@ -504,10 +504,10 @@ if __name__ == "__main__":
     ## Initialize the EKF system #TODO check initial values
     # vio_ekf = EKF(np.array([0,0,0]), np.array([0, 0, 0]), initial_quat_wxyz, debug=False)
     vio_ekf = EKF(np.array([0,0,0]), np.array([0, 0, 0]), np.array([1,0,0,0]), debug=False)
-    vio_ekf.use_new_data = False
-    vio_ekf.setSigmaAccel(0.1)
-    vio_ekf.setSigmaGyro(0.1)
-    vio_ekf.setSigmaVO(0.1)
+    vio_ekf.use_new_data = True
+    vio_ekf.setSigmaAccel(1.)
+    vio_ekf.setSigmaGyro(0.5)
+    vio_ekf.setSigmaVO(100.)
 
     
 
@@ -515,7 +515,7 @@ if __name__ == "__main__":
     gyro_list = []
     
     # Main Loop ############################################################# 
-    max_length = 100
+    max_length = 500
     first = True
     while True:
         accel_list.append(accel)
@@ -530,10 +530,11 @@ if __name__ == "__main__":
 
 
         # convert to right-handed coordinates
-        accel[1] *= -1
+        # accel[1] *= -1
+        accel[2] *= -1
         
         gyro[1] *= -1
-        gyro[2] *= -1
+        # gyro[2] *= -1
         gyro *= np.pi / 180 # radians
 
         print(accel,"accel")
@@ -577,7 +578,7 @@ if __name__ == "__main__":
 
 
         # EKF UPDATE #TODO #########################
-        # vio_ekf.SuperGlueUpdate((position_start[:3].T @ vo_compensation).T)
+        vio_ekf.SuperGlueUpdate((copy.deepcopy(position_start[:3]).T @ vo_compensation).T)
         vio_ekf.addToStateList()
         ########################################
 

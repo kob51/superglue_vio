@@ -6,8 +6,6 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import pickle
 
-# from data.rotations import Quaternion
-
 # https://github.com/jasleon/Vehicle-State-Estimation
 
 import matplotlib
@@ -23,8 +21,7 @@ def skew_symmetric(v):
     )
 
 class EKF:
-    def __init__(self,gt_p,gt_v,gt_quat,scipy=True,debug=True):
-        self.scipy = scipy
+    def __init__(self,gt_p,gt_v,gt_quat,debug=True):
         self.debug = debug
 
         self.use_new_data = True
