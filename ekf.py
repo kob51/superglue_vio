@@ -33,6 +33,7 @@ class EKF:
         self.state[6:] = np.roll(gt_quat,1)
 
         self.state_list = np.zeros((0,10))
+        self.pose_list = np.ones((4,4))
         self.addToStateList()
         
 
@@ -71,6 +72,16 @@ class EKF:
     
     def addToStateList(self):
         self.state_list = np.concatenate((self.state_list,self.state.reshape(1,-1)))
+
+        rotation = R.from_quat(np.roll(self.state[6:],-1)).as_matrix()
+
+        pose = np.eye(4)
+        pose[:3,:3] = rotation
+        pose[:3,3] = self.state[:3]
+        print(self.pose_list.shape)
+        print(pose.shape)
+        self.pose_list = np.dstack((self.pose_list,pose))
+
         if self.debug:
             print("position",self.state[:3])
             print("velocity",self.state[3:6])
