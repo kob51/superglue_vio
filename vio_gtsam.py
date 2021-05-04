@@ -697,19 +697,19 @@ class VisualInertialOdometryGraph(object):
         self.initial_estimate.insert(pose_key, gtsam.Pose3(measured_poses[0]))
 
         # IMU prior
-        # bias_key = B(0)
-        # bias_noise = gtsam.noiseModel.Isotropic.Sigma(6, 0.5)
-        # self.graph.push_back(gtsam.PriorFactorConstantBias(bias_key, gtsam.imuBias.ConstantBias(), bias_noise))
+        bias_key = B(0)
+        bias_noise = gtsam.noiseModel.Isotropic.Sigma(6, 0.5)
+        self.graph.push_back(gtsam.PriorFactorConstantBias(bias_key, gtsam.imuBias.ConstantBias(), bias_noise))
 
-        # self.initial_estimate.insert(bias_key, gtsam.imuBias.ConstantBias())
+        self.initial_estimate.insert(bias_key, gtsam.imuBias.ConstantBias())
 
         # Velocity prior
-        # velocity_key = V(0)
-        # velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, .5)
-        # velocity_0 = measured_vel[0]
-        # self.graph.push_back(gtsam.PriorFactorVector(velocity_key, velocity_0, velocity_noise))
+        velocity_key = V(0)
+        velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, .5)
+        velocity_0 = measured_vel[0]
+        self.graph.push_back(gtsam.PriorFactorVector(velocity_key, velocity_0, velocity_noise))
 
-        # self.initial_estimate.insert(velocity_key, velocity_0)
+        self.initial_estimate.insert(velocity_key, velocity_0)
         
         # Preintegrator
         accum = gtsam.PreintegratedImuMeasurements(self.IMU_PARAMS)
@@ -723,12 +723,12 @@ class VisualInertialOdometryGraph(object):
                                     gtsam.Point3(4 * np.random.randn(), 4 * np.random.randn(), 4 * np.random.randn()))
                 self.initial_estimate.insert(pose_key, gtsam.Pose3(measured_poses[i]).compose(DELTA))
 
-                # velocity_key += 1
-                # self.initial_estimate.insert(velocity_key, measured_vel[i])
+                velocity_key += 1
+                self.initial_estimate.insert(velocity_key, measured_vel[i])
 
-                # bias_key += 1
-                # self.graph.add(gtsam.BetweenFactorConstantBias(bias_key - 1, bias_key, gtsam.imuBias.ConstantBias(), self.BIAS_COVARIANCE))
-                # self.initial_estimate.insert(bias_key, gtsam.imuBias.ConstantBias())
+                bias_key += 1
+                self.graph.add(gtsam.BetweenFactorConstantBias(bias_key - 1, bias_key, gtsam.imuBias.ConstantBias(), self.BIAS_COVARIANCE))
+                self.initial_estimate.insert(bias_key, gtsam.imuBias.ConstantBias())
 
                 # Add IMU Factor
                 self.graph.add(gtsam.ImuFactor(pose_key - 1, velocity_key - 1, pose_key, velocity_key, bias_key, accum))
@@ -739,8 +739,8 @@ class VisualInertialOdometryGraph(object):
     def add_keypoints(self,vision_data,measured_poses,n_skip, depth):
         
       measured_poses = np.reshape(measured_poses,(-1,4,4))
-      pose_key = X(0)
-      self.initial_estimate.insert(pose_key, gtsam.Pose3(measured_poses[0]))
+    #   pose_key = X(0)
+    #   self.initial_estimate.insert(pose_key, gtsam.Pose3(measured_poses[0]))
     #   R_rect = np.array([[9.999239e-01, 9.837760e-03, -7.445048e-03, 0.],
     #                      [ -9.869795e-03, 9.999421e-01, -4.278459e-03, 0.],
     #                      [ 7.402527e-03, 4.351614e-03, 9.999631e-01, 0.],
@@ -851,7 +851,7 @@ if __name__ == "__main__":
     velocity = copy.deepcopy(vehicle.imu_sensor.velocity)
 
 
-
+    
 
     # Initialize plot
     fig = plt.figure()
@@ -888,6 +888,27 @@ if __name__ == "__main__":
     # transform from global frame to start frame
     H_global_to_start = np.linalg.inv(H_start_to_global)
 
+    accel_list = []
+    gyro_list = []
+    velocity_list = []
+
+    accel[2] *= -1
+    velocity[2] *= -1
+
+    velocity = np.array([*velocity, 0])
+    velocity_new = H_global_to_start @ velocity
+    velocity = velocity_new[:3]
+
+    
+    gyro[1] *= -1
+    # gyro[2] *= -1
+    gyro *= np.pi / 180 # radians
+
+
+    accel_list.append(accel)
+    velocity_list.append(velocity)
+    gyro_list.append(gyro)
+
     # handles difference between VO axes and CARLA axes. only gets applied at the end
     vo_compensation = (R.from_euler('x',-90,degrees=True) * R.from_euler('z',90,degrees=True)).as_matrix()
 
@@ -922,19 +943,18 @@ if __name__ == "__main__":
 
     
 
-    accel_list = []
-    gyro_list = []
-    velocity_list = []
+    
 
     
     # Main Loop ############################################################# 
-    max_length = 100
+    max_length = 50
     first = True
     step = 0
 
     tracker = PointTracker(max_length=max_length, nn_thresh=0.9)
 
     depth_list = []
+    dt_list = []
 
     while True:
         step += 1
@@ -954,27 +974,27 @@ if __name__ == "__main__":
 
 
         # convert to right-handed coordinates
-        # accel[1] *= -1
-        accel[2] *= -1
-        velocity[2] *= -1
+        next_accel[2] *= -1
+        next_velocity[2] *= -1
 
-        velocity = np.array([*velocity, 0])
+        velocity = np.array([*next_velocity, 0])
         velocity_new = H_global_to_start @ velocity
-        velocity = velocity_new[:3]
+        next_velocity = velocity_new[:3]
 
         
-        gyro[1] *= -1
-        # gyro[2] *= -1
-        gyro *= np.pi / 180 # radians
+        next_gyro[1] *= -1
+        next_gyro *= np.pi / 180 # radians
 
         print(accel,"accel")
         print(gyro,"gyro")
-        print(velocity, "velocity")
+        print(next_velocity, "velocity")
         print()
-        accel_list.append(accel)
-        gyro_list.append(gyro)
-        velocity_list.append(velocity)
+        accel_list.append(next_accel)
+        gyro_list.append(next_gyro)
+        velocity_list.append(next_velocity)
 
+
+        dt_list.append(t-t_prev)
 
         # Perform prediction based on IMU signal
         vio_ekf.IMUPrediction(accel, gyro, t - t_prev)
@@ -1045,6 +1065,8 @@ if __name__ == "__main__":
         trajectory_vio_np = vio_ekf.getTrajectory().T
 
         
+
+        
         ax.plot3D(
             trajectory_gt_np[0],
             trajectory_gt_np[1],
@@ -1088,6 +1110,12 @@ if __name__ == "__main__":
 
     gyro_list_np = np.array(gyro_list)
     accel_list_np = np.array(accel_list)
+    velocity_np = np.asarray(velocity_list)
+    dt = np.asarray(dt_list)
+
+    print(velocity_np.shape)
+    print(dt.shape)
+    # f
 
     np.savez("imu_output.npz",accel = accel_list_np,gyro = gyro_list_np,gt=trajectory_gt_np)
 
@@ -1105,9 +1133,9 @@ if __name__ == "__main__":
     g=9.81
     IMU_PARAMS = gtsam.PreintegrationParams.MakeSharedU(g)
     I = np.eye(3)
-    IMU_PARAMS.setAccelerometerCovariance(I * 0.2)
-    IMU_PARAMS.setGyroscopeCovariance(I * 0.2)
-    IMU_PARAMS.setIntegrationCovariance(I * 0.2)
+    IMU_PARAMS.setAccelerometerCovariance(I * 1000)
+    IMU_PARAMS.setGyroscopeCovariance(I * 1000)
+    IMU_PARAMS.setIntegrationCovariance(I * 1000)
 
     BIAS_COVARIANCE = gtsam.noiseModel.Isotropic.Variance(6, 0.4)
     
@@ -1123,6 +1151,17 @@ if __name__ == "__main__":
 
     vio_full = VisualInertialOdometryGraph(vehicle.front_camera_intrinsics,IMU_PARAMS=IMU_PARAMS, BIAS_COVARIANCE=BIAS_COVARIANCE)
     
+    print(trajectory_vio_np.shape,"VIO")
+    print(accel_list_np.shape,"accel")
+    print(accel_list_np)
+    print(gyro_list_np.shape,"gyro")
+    print(gyro_list_np)
+    print(velocity_np.shape,"vel")
+    print(dt.shape,"dt")
+    dt[0] = 0.1
+    print(dt)
+
+    vio_full.add_imu_measurements(trajectory_vio_np.T, accel_list_np, gyro_list_np, velocity_np, dt, 1)
     vio_full.add_keypoints(vision_data, vio_ekf.pose_list, 1, depth_list)
 
     result_full = vio_full.estimate(SOLVER_PARAMS=params)
