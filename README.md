@@ -1,3 +1,8 @@
+Code repo for the SLAM project. 
+
+Kevin O'Brien 
+Mayank Singal
+Sanil Pande
 
 # superglue_vio
 
@@ -20,5 +25,5 @@ cd <carla_dir>
 2. Run script
 ```
 cd superglue_vio
-python vio.py
+python vio_clean.py
 ```
