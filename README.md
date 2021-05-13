@@ -6,7 +6,8 @@ Sanil Pande
 
 First, install CARLA.
 Then create a project folder.
-Inside the project folder, clone the repo https://github.com/magicleap/SuperGluePretrainedNetwork
+Inside the project folder, clone the repo https://github.com/magicleap/SuperGluePretrainedNetwork.
+
 Then clone this repo in the project folder.
 
 # superglue_vio
