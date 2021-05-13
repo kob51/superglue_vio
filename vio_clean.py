@@ -38,7 +38,11 @@ from ekf import EKF
 
 import copy
 from transforms3d.euler import euler2mat
+from agents.navigation.behavior_agent import BehaviorAgent
 
+import os
+
+from datetime import datetime
 
 torch.set_grad_enabled(False)
 
@@ -180,7 +184,7 @@ class MotionEstimator:
         object_points = np.vstack(object_points)
         pts2_filtered = np.vstack(pts2_filtered)
 
-        _, rvec, t, inliners = cv2.solvePnPRansac(
+        _, rvec, t, inliers = cv2.solvePnPRansac(
             object_points, pts2_filtered, intrinsics, None
         )
 
@@ -256,14 +260,50 @@ class Car:
 
         blueprint_library = self.world.get_blueprint_library()
         self.model_3 = blueprint_library.filter("model3")[0]
+        self.model_3.set_attribute('role_name', 'hero')
+        self.agent = None
+        
+        settings = self.world.get_settings()
+        settings.synchronous_mode = False  # Disables synchronous mode
+        settings.fixed_delta_seconds = 0
+        self.world.apply_settings(settings)
+            
 
     def reset(self):
+        
+        actors = self.world.get_actors()
+        self.client.apply_batch(
+            [carla.command.DestroyActor(x) for x in actors if "vehicle" in x.type_id]
+        )
+        self.client.apply_batch(
+            [carla.command.DestroyActor(x) for x in actors if "sensor" in x.type_id]
+        )
+        for a in actors.filter("vehicle*"):
+            if a.is_alive:
+                a.destroy()
+        for a in actors.filter("sensor*"):
+            if a.is_alive:
+                a.destroy()
+                
+        print("Scene init done!")
+        
         self.actor_list = []
 
-        self.transform = random.choice(self.world.get_map().get_spawn_points())
+
+        self.transform = self.world.get_map().get_spawn_points()[0]
         self.transform.location.z += 1
         self.vehicle = self.world.spawn_actor(self.model_3, self.transform)
-        self.vehicle.set_autopilot()
+        # self.vehicle.set_autopilot()
+        ##### Setup Agent #####
+        self.agent = BehaviorAgent(self.vehicle, behavior="normal")
+        destination_location = self.world.get_map().get_spawn_points()[50].location
+        self.agent.set_destination(self.vehicle.get_location(), destination_location, clean=True)
+        self.agent.update_information(self.world)
+        
+        
+        ########################
+        
+        
         self.actor_list.append(self.vehicle)
 
         self.rgb_cam = self.world.get_blueprint_library().find("sensor.camera.rgb")
@@ -379,9 +419,9 @@ def carla_rotation_to_numpy_rotation_matrix(carla_rotation):
     rotation_matrix = numpy_array[:3, :3]
     return rotation_matrix
 
-
 if __name__ == "__main__":
 
+    # Initial Setup #########################################################
     ## Initialize superglue + superpoint system
     superMatcher = SuperMatcher()
 
@@ -394,105 +434,125 @@ if __name__ == "__main__":
 
     ## Sleep for 2 seconds due to CARLA reasons (car needs some time to properly spawn)
     time.sleep(2)
+    
+    settings = vehicle.world.get_settings()
+    settings.synchronous_mode = True  # Enables synchronous mode
+    settings.fixed_delta_seconds = 0.1#0.025#0.025
+    vehicle.world.apply_settings(settings)
 
-    ## Initialize anchor, time reference,
+    ## Initialize anchor, time reference, initial sensor readings
     superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
     t_prev = vehicle.imu_sensor.timestamp
+    accel = copy.deepcopy(vehicle.imu_sensor.accelerometer)
+    gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
 
-    ## Initialize container for poses, and trajectory
-    all_poses = [np.eye(4)]
-    trajectory_vo = [np.array([0, 0, 0])]
+    # Initialize plot
+    fig = plt.figure()
+    ax = plt.axes(projection="3d")
 
-    ## Get initial rotation and location (Left - Handed)
+
+
+    ### Location transforms ###############################################
+    # we have 3 frames to deal with
+    #   1. global CARLA frame
+    #   2. robot start frame
+    #   3. VO frame
+
+
+    ## Get initial rotation and location in CARLA global frame (Left - Handed)
     initial_transform = vehicle.actor_list[0].get_transform()
     initial_rotation = initial_transform.rotation
     initial_location = initial_transform.location
 
-
-    ## Convert rotation and location to right-handed
+    ## Convert global rotation and location to right-handed
     r_right_handed = R.from_matrix(
         carla_rotation_to_numpy_rotation_matrix(initial_rotation)
     )
+
     t_right_handed = np.array(
         [initial_location.x, initial_location.y * -1, initial_location.z]
     ).T
 
-    ## Convert the right-handed rotation to a quaternion, roll it to get the form w,x,y,z from x,y,z,w
-    initial_quat = np.roll(r_right_handed.as_quat(), 1)
+    # transform from start frame to global frame
+    H_start_to_global = np.eye(4)
+    H_start_to_global[:3, :3] = r_right_handed.as_matrix()
+    H_start_to_global[:3, 3] = t_right_handed
+
+    # transform from global frame to start frame
+    H_global_to_start = np.linalg.inv(H_start_to_global)
+
+    # handles difference between VO axes and CARLA axes. only gets applied at the end
+    vo_compensation = (R.from_euler('x',-90,degrees=True) * R.from_euler('z',90,degrees=True)).as_matrix()
+
+    # Initial trajectory points ##################################################
+    ## Initialize container for robot poses, and trajectory (both in robot start frame)
+    all_poses = [np.eye(4)]
+    trajectory_vo = [np.array([0, 0, 0])]
+
+    # initialize first ground truth position
+    # transform from global frame to robot start frame
+    initial_pos = H_global_to_start @ np.append(t_right_handed,1)
+    trajectory_gt = [initial_pos]
+
+
+
+    # EKF Initialization #TODO #########################################################
+    # Convert the right-handed rotation to a quaternion, roll it to get the form w,x,y,z from x,y,z,w
+    initial_quat_wxyz = np.roll(r_right_handed.as_quat(), 1)
+    # initial_quat_wxyz = np.roll(R.from_matrix(car_start_r).as_quat(), 1)
 
     ## Initialize the EKF system #TODO check initial values
-    vio_ekf = EKF(np.array([0, 0, 0]), np.array([0, 0, 0]), initial_quat, debug=False)
-    vio_ekf.use_new_data = False
+    # vio_ekf = EKF(np.array([0,0,0]), np.array([0, 0, 0]), initial_quat_wxyz, debug=False)
+    vio_ekf = EKF(np.array([0,0,0]), np.array([0, 0, 0]), np.array([1,0,0,0]), debug=False)
+    vio_ekf.use_new_data = True
+    vio_ekf.setSigmaAccel(1.)
+    vio_ekf.setSigmaGyro(0.5)
+    vio_ekf.setSigmaVO(5.)
 
-    # --- Set instrument noise parameters
-    vio_ekf.setSigmaAccel(0.0)
-    vio_ekf.setSigmaGyro(0.0)
+    
 
-    ### Location transform ###############################################
-    H_local_to_global = np.eye(4)
-    H_local_to_global[:3, :3] = r_right_handed.as_matrix()
-    H_local_to_global[:3, 3] = t_right_handed
-    H_global_to_local = np.linalg.inv(H_local_to_global)
-
-    r_right_handed = R.from_matrix(H_global_to_local[:3, :3])
-    t_right_handed = H_global_to_local[:3, 3]
-
-    r_right_handed = r_right_handed.as_rotvec()
-    r_left_handed = -1 * r_right_handed * 180 / np.pi
-    t_left_handed = t_right_handed.T
-    t_left_handed[1] = t_left_handed[1] * -1
-
-    roll, pitch, yaw = (
-        r_left_handed[0],
-        r_left_handed[1],
-        r_left_handed[2],
-    )
-
-    (
-        x,
-        y,
-        z,
-    ) = t_left_handed  # initial_location.x, initial_location.y, initial_location.z
-
-    inv_transform = carla.Transform(
-        location=carla.Location(x=x, y=y, z=z),
-        rotation=carla.Rotation(roll=roll, pitch=pitch, yaw=yaw),
-    )
-
-    inv_transform.transform(initial_location)
-
-    initial_pos = np.array([initial_location.x, initial_location.y, initial_location.z])
-
-    trajectory_gt = [initial_pos]
-    #########################################################################
-
-    fig = plt.figure()
-    ax = plt.axes(projection="3d")
-
+    accel_list = []
+    gyro_list = []
+    
+    # Main Loop ############################################################# 
+    max_length = 500
     first = True
+    step = 0
     while True:
+        step += 1
+        accel_list.append(accel)
+        gyro_list.append(gyro)
+        # vehicle.vehicle.apply_control(vehicle.agent.run_step())
+        # continue
 
-        #### EKF Prediction #######################
-        accel = copy.deepcopy(vehicle.imu_sensor.accelerometer)
-        gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
+        #### EKF Prediction #TODO #######################
         t = copy.deepcopy(vehicle.imu_sensor.timestamp)
+        next_accel = copy.deepcopy(vehicle.imu_sensor.accelerometer)
+        next_gyro = copy.deepcopy(vehicle.imu_sensor.gyroscope)
+
 
         # convert to right-handed coordinates
-        accel[1] *= -1
-        gyro *= 180/np.pi
-        gyro = carla.Rotation(roll=gyro[0], pitch=gyro[1], yaw=gyro[2])
-        gyro = R.from_matrix(carla_rotation_to_numpy_rotation_matrix(gyro))
-        gyro = gyro.as_euler("xyz")
+        # accel[1] *= -1
+        accel[2] *= -1
+        
+        gyro[1] *= -1
+        # gyro[2] *= -1
+        gyro *= np.pi / 180 # radians
 
-        #######################################################
-        print("Gy:\t", gyro)
-        print("Ac:\t", accel)
+        print(accel,"accel")
+        print(gyro,"gyro")
+        print()
 
         # Perform prediction based on IMU signal
         vio_ekf.IMUPrediction(accel, gyro, t - t_prev)
-        t_prev = t
-        ########################################3
+        t_prev = copy.deepcopy(t)
+        accel = copy.deepcopy(next_accel)
+        gyro = copy.deepcopy(next_gyro)
+        ###############################################
+        
+        
 
+        # Visual Odometry ###########################################
         out_image_pair, pts1, pts2 = superMatcher.process(vehicle.front_camera[:, :, 0])
         R_, t = motionEstimator.estimate_R_t(
             pts1,
@@ -507,52 +567,50 @@ if __name__ == "__main__":
             3,
         )
 
-        global_robot_pose = all_poses[-1] @ current_pose
-        all_poses.append(global_robot_pose)
-        position_xyz = global_robot_pose @ np.array([0, 0, 0, 1])
-        trajectory_vo.append(position_xyz[:3])
-
-        # EKF UPDATE #########################
-        # vio_ekf.SuperGlueUpdate(position_xyz[:3])
-        vio_ekf.addToStateList()
-        ########################################
-
-        # print("Trajectory Length:", len(trajectory_vo))
-
-        gt_pos = vehicle.actor_list[0].get_location()
-
-        # gt_pos -= gt_origin
-        gt_pos = inv_transform.transform(gt_pos)
-        gt_pos = np.array([gt_pos.x, gt_pos.y, gt_pos.z])
-
-        trajectory_gt.append(gt_pos)
-
         cv2.imshow("matches", out_image_pair)
-        # cv2.imshow("depth", vehicle.front_camera_depth_old)
         cv2.waitKey(1)
         superMatcher.set_anchor(vehicle.front_camera[:, :, 0])
 
-        if len(trajectory_vo) == 1000:
-            # if len(trajectory_vo) == 25:
-            break
-        trajectory_vo_np = np.asarray(trajectory_vo).T
+        # new VO trajectory point is relative transformation from previous pose
+        robot_pose_start = all_poses[-1] @ current_pose
+        all_poses.append(robot_pose_start)
+        position_start = robot_pose_start @ np.array([0, 0, 0, 1])
+        trajectory_vo.append(position_start[:3])
+        ###############################################################
+
+
+        # EKF UPDATE #TODO #########################
+        if(step % 10 == 0):
+            # vio_ekf.SuperGlueUpdate((copy.deepcopy(position_start[:3]).T @ vo_compensation).T)
+            vo_pose = (copy.deepcopy(position_start[:3]).T @ vo_compensation).T
+            vo_pose[2] = 0
+            vio_ekf.SuperGlueUpdate(vo_pose[:3])
+
+        
+        vio_ekf.addToStateList()
+        ########################################
+
+
+        # Add gt trajectory point (change to right handed coordinates,
+        # then transform to robot start frame)
+        gt_pos = vehicle.actor_list[0].get_location()
+        gt_pos = np.array([gt_pos.x, -gt_pos.y, gt_pos.z, 1])
+        trajectory_gt.append(H_global_to_start @ gt_pos)
+
+        # Apply control on vehicle
+        vehicle.vehicle.apply_control(vehicle.agent.run_step())
+        vehicle.world.tick()
+
+
+        # Plotting ####################################
+
+        # rotate VO points from VO frame to robot start frame
+        trajectory_vo_np = (np.asarray(trajectory_vo) @ vo_compensation).T
+        
         trajectory_gt_np = np.asarray(trajectory_gt).T
         trajectory_vio_np = vio_ekf.getTrajectory().T
 
-        ax.plot3D(
-            -1 * trajectory_vo_np[2],
-            trajectory_vo_np[0],
-            trajectory_vo_np[1],
-            "green",
-            label="Estimated (VO)",
-        )
-        ax.plot3D(
-            -1 * trajectory_vio_np[2],
-            trajectory_vio_np[0],
-            trajectory_vio_np[1],
-            "blue",
-            label="Estimated (VIO)",
-        )
+        
         ax.plot3D(
             trajectory_gt_np[0],
             trajectory_gt_np[1],
@@ -561,6 +619,24 @@ if __name__ == "__main__":
             label="Ground Truth",
         )
 
+        ax.plot3D(
+            trajectory_vo_np[0],
+            trajectory_vo_np[1],
+            trajectory_vo_np[2],
+            "green",
+            label="Estimated (VO)",
+        )
+
+        ax.plot3D(
+            trajectory_vio_np[0],
+            trajectory_vio_np[1],
+            trajectory_vio_np[2],
+            "blue",
+            label="Estimated (VIO)",
+        )
+
+        
+        # figure setup
         if first:
             ax.set_xlabel("X axis")
             ax.set_ylabel("Y axis")
@@ -573,6 +649,22 @@ if __name__ == "__main__":
 
         plt.pause(0.05)
 
+        if len(trajectory_vo) == max_length:
+            break
+
+    gyro_list_np = np.array(gyro_list)
+    accel_list_np = np.array(accel_list)
+
+    np.savez("imu_output.npz",accel = accel_list_np,gyro = gyro_list_np,gt=trajectory_gt_np)
+
+    if not os.path.exists('output'):
+        os.makedirs('output')
+
+    now = datetime.now()
+    npz_path = 'output/' + now.strftime("%d_%m_%H_%M_%S.npz")
+
+    np.savez(npz_path,gt=trajectory_gt_np,vo=trajectory_vo_np,vio=trajectory_vio_np)
+
+
     for actor in vehicle.actor_list:
         actor.destroy()
-    plt.show()
